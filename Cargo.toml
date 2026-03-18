@@ -1,0 +1,12 @@
+[package]
+name = "cococa-clip"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cocoa = "0.26.1"
+objc = "0.2"
+arboard = "3"
+core-graphics = "0.24"
+log = "0.4"
+env_logger = "0.11"
