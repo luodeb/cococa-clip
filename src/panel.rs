@@ -7,6 +7,7 @@ use log::{debug, error};
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel};
+use std::cell::RefCell;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::sync::Once;
@@ -52,6 +53,22 @@ const HISTORY_LIMIT: usize = 60;
 const HEADER_BUTTON_SIZE: f64 = 30.0;
 const HEADER_BUTTON_SPACING: f64 = 16.0;
 const HEADER_ICON_SIZE: u32 = 22;
+const SETTINGS_PAGE_OFFSET_X: f64 = PANEL_WIDTH + 24.0;
+
+const SETTINGS_TITLE_Y: f64 = PANEL_HEIGHT - 148.0;
+const SETTINGS_SUBTITLE_Y: f64 = PANEL_HEIGHT - 182.0;
+const SETTINGS_CARD_WIDTH: f64 = PANEL_WIDTH - PANEL_SIDE_MARGIN * 2.0;
+const SETTINGS_PREVIEW_Y: f64 = PANEL_HEIGHT - 436.0;
+const SETTINGS_PREVIEW_HEIGHT: f64 = 156.0;
+const SETTINGS_ACTION_BUTTON_Y: f64 = 74.0;
+const SETTINGS_ACTION_BUTTON_HEIGHT: f64 = 44.0;
+const SETTINGS_ACTION_BUTTON_GAP: f64 = 12.0;
+const SETTINGS_ACTION_BUTTON_WIDTH: f64 = (SETTINGS_CARD_WIDTH - SETTINGS_ACTION_BUTTON_GAP) / 2.0;
+
+const HOTKEY_SETTINGS_IDLE_HINT: &str = "点击“录制新快捷键”后按下组合键，确认无误再保存";
+const HOTKEY_SETTINGS_RECORDING_HINT: &str = "请按下新的快捷键组合，按 Esc 或点“取消”放弃修改";
+const HOTKEY_SETTINGS_PENDING_HINT: &str = "新的快捷键已录制，点击“保存”应用，或点“取消”保留原绑定";
+const HOTKEY_CAPTURE_CANCEL_KEYCODE: u16 = 53;
 
 const SEARCH_BAR_HEIGHT: f64 = 56.0;
 const SEARCH_BAR_Y: f64 = PANEL_HEIGHT - 108.0;
@@ -68,11 +85,14 @@ const HISTORY_ICON_BOX_SIZE: f64 = 40.0;
 const HISTORY_ICON_SIZE: u32 = 18;
 
 const SETTINGS_ICON_SVG: &str = include_str!("../assets/icons/settings.svg");
-const CHECK_ICON_SVG: &str = include_str!("../assets/icons/check-circle.svg");
 const DELETE_ICON_SVG: &str = include_str!("../assets/icons/trash.svg");
 const SEARCH_ICON_SVG: &str = include_str!("../assets/icons/search.svg");
 const FILTER_ICON_SVG: &str = include_str!("../assets/icons/filter.svg");
 const LIST_ICON_SVG: &str = include_str!("../assets/icons/list.svg");
+
+thread_local! {
+    static HOTKEY_DRAFT_BINDING: RefCell<Option<hotkey::HotKeyBinding>> = RefCell::new(None);
+}
 
 pub fn register_controller_class() -> *const Class {
     static ONCE: Once = Once::new();
@@ -86,6 +106,19 @@ pub fn register_controller_class() -> *const Class {
         decl.add_ivar::<id>("history_document_view");
         decl.add_ivar::<id>("global_click_monitor");
         decl.add_ivar::<id>("local_click_monitor");
+        decl.add_ivar::<id>("local_key_monitor");
+        decl.add_ivar::<id>("local_scroll_monitor");
+        decl.add_ivar::<id>("main_page");
+        decl.add_ivar::<id>("settings_page");
+        decl.add_ivar::<id>("settings_subtitle_label");
+        decl.add_ivar::<id>("footer_modifier_label");
+        decl.add_ivar::<id>("footer_key_label");
+        decl.add_ivar::<id>("settings_preview_label");
+        decl.add_ivar::<id>("settings_record_button");
+        decl.add_ivar::<id>("settings_save_button");
+        decl.add_ivar::<id>("settings_cancel_button");
+        decl.add_ivar::<BOOL>("hotkey_recording");
+        decl.add_ivar::<BOOL>("settings_visible");
 
         decl.add_method(
             sel!(applicationDidFinishLaunching:),
@@ -110,6 +143,18 @@ pub fn register_controller_class() -> *const Class {
         decl.add_method(
             sel!(showSettings:),
             show_settings as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(beginHotkeyRecording:),
+            begin_hotkey_recording as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(saveHotkeyBinding:),
+            save_hotkey_binding as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(cancelHotkeyRecording:),
+            cancel_hotkey_recording as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(historyEntrySelected:),
@@ -184,6 +229,7 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
         app::keep_panel_above_apps(panel);
         let _: () = msg_send![panel, center];
 
+        refresh_hotkey_views(panel);
         render_history_entries(panel);
         show_panel(panel);
     }
@@ -246,8 +292,67 @@ extern "C" fn clear_input(this: &Object, _: Sel, _: id) {
     }
 }
 
-extern "C" fn show_settings(_: &Object, _: Sel, _: id) {
-    debug!("settings toolbar button clicked");
+extern "C" fn show_settings(this: &Object, _: Sel, _: id) {
+    unsafe {
+        let panel: id = *this.get_ivar("panel");
+        if panel == nil {
+            return;
+        }
+
+        let visible: BOOL = *this.get_ivar("settings_visible");
+        transition_settings_page(panel, visible == NO);
+    }
+}
+
+extern "C" fn begin_hotkey_recording(this: &Object, _: Sel, _: id) {
+    unsafe {
+        let panel: id = *this.get_ivar("panel");
+        if panel == nil {
+            return;
+        }
+
+        let _: BOOL = msg_send![panel, makeFirstResponder: nil];
+        set_hotkey_draft_binding(None);
+        refresh_hotkey_views(panel);
+        set_hotkey_recording(panel, true, None);
+    }
+}
+
+extern "C" fn save_hotkey_binding(this: &Object, _: Sel, _: id) {
+    unsafe {
+        let panel: id = *this.get_ivar("panel");
+        if panel == nil {
+            return;
+        }
+
+        let Some(binding) = hotkey_draft_binding() else {
+            return;
+        };
+
+        match hotkey::set_binding(binding) {
+            Ok(_) => {
+                set_hotkey_draft_binding(None);
+                refresh_hotkey_views(panel);
+                pulse_hotkey_labels(panel);
+                set_hotkey_recording(panel, false, None);
+            }
+            Err(err) => {
+                error!("更新全局快捷键失败: {err}");
+                set_hotkey_recording(panel, false, Some("系统未接受该快捷键，请换一个组合"));
+            }
+        }
+    }
+}
+
+extern "C" fn cancel_hotkey_recording(this: &Object, _: Sel, _: id) {
+    unsafe {
+        let panel: id = *this.get_ivar("panel");
+        if panel == nil {
+            return;
+        }
+
+        cancel_hotkey_recording_if_needed(panel);
+    }
 }
 
 extern "C" fn history_entry_selected(this: &Object, _: Sel, sender: id) {
@@ -328,6 +433,16 @@ fn show_panel(panel: id) {
         let _: () = msg_send![panel, orderFrontRegardless];
         let _: () = msg_send![panel, makeKeyWindow];
 
+        let controller = controller_from_panel(panel);
+        if controller != nil {
+            let controller = &*(controller as *const Object);
+            let settings_visible: BOOL = *controller.get_ivar("settings_visible");
+            if settings_visible == YES {
+                let _: BOOL = msg_send![panel, makeFirstResponder: nil];
+                return;
+            }
+        }
+
         let input_field = input_field_from_panel(panel);
         if input_field != nil {
             let _: BOOL = msg_send![panel, makeFirstResponder: input_field];
@@ -342,31 +457,95 @@ fn install_outside_click_monitors(controller: *mut Object, panel: id) {
             return;
         }
 
-        let left_mouse_down_mask = NSEventMask::NSLeftMouseDownMask.bits();
+        let mouse_down_mask = (NSEventMask::NSLeftMouseDownMask
+            | NSEventMask::NSRightMouseDownMask
+            | NSEventMask::NSOtherMouseDownMask)
+            .bits();
 
         let global_handler = ConcreteBlock::new(move |_event: id| {
+            cancel_hotkey_recording_if_needed(panel);
             hide_panel_if_outside_click(panel);
         })
         .copy();
         let global_monitor: id = msg_send![
             class!(NSEvent),
-            addGlobalMonitorForEventsMatchingMask: left_mouse_down_mask
+            addGlobalMonitorForEventsMatchingMask: mouse_down_mask
             handler: &*global_handler
         ];
 
         let local_handler = ConcreteBlock::new(move |event: id| -> id {
+            cancel_hotkey_recording_if_needed(panel);
             hide_panel_if_outside_click(panel);
             event
         })
         .copy();
         let local_monitor: id = msg_send![
             class!(NSEvent),
-            addLocalMonitorForEventsMatchingMask: left_mouse_down_mask
+            addLocalMonitorForEventsMatchingMask: mouse_down_mask
             handler: &*local_handler
+        ];
+
+        let key_handler = ConcreteBlock::new(move |event: id| -> id {
+            if handle_hotkey_recording_key_event(panel, event) {
+                return nil;
+            }
+
+            event
+        })
+        .copy();
+        let key_monitor: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: NSEventMask::NSKeyDownMask.bits()
+            handler: &*key_handler
+        ];
+
+        let scroll_handler = ConcreteBlock::new(move |event: id| -> id {
+            if should_block_scroll_event(panel, event) {
+                return nil;
+            }
+
+            event
+        })
+        .copy();
+        let scroll_monitor: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: NSEventMask::NSScrollWheelMask.bits()
+            handler: &*scroll_handler
         ];
 
         (*controller).set_ivar("global_click_monitor", global_monitor);
         (*controller).set_ivar("local_click_monitor", local_monitor);
+        (*controller).set_ivar("local_key_monitor", key_monitor);
+        (*controller).set_ivar("local_scroll_monitor", scroll_monitor);
+    }
+}
+
+fn should_block_scroll_event(panel: id, event: id) -> bool {
+    unsafe {
+        if panel == nil || event == nil {
+            return false;
+        }
+
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return false;
+        }
+
+        let controller = &*(controller as *const Object);
+        let settings_visible: BOOL = *controller.get_ivar("settings_visible");
+        if settings_visible != YES {
+            return false;
+        }
+
+        let is_visible: BOOL = msg_send![panel, isVisible];
+        if is_visible != YES {
+            return false;
+        }
+
+        let event_location_in_window: NSPoint = msg_send![event, locationInWindow];
+        let event_location_on_screen: NSPoint = msg_send![panel, convertPointToScreen: event_location_in_window];
+
+        point_inside_panel_frame(panel, event_location_on_screen)
     }
 }
 
@@ -414,13 +593,289 @@ fn input_field_from_panel(panel: id) -> id {
 
 fn history_document_view_from_panel(panel: id) -> id {
     unsafe {
-        let controller: id = msg_send![panel, delegate];
+        let controller = controller_from_panel(panel);
         if controller == nil {
             return nil;
         }
 
         let controller = &*(controller as *const Object);
         *controller.get_ivar("history_document_view")
+    }
+}
+
+fn controller_from_panel(panel: id) -> id {
+    unsafe {
+        if panel == nil {
+            return nil;
+        }
+
+        msg_send![panel, delegate]
+    }
+}
+
+fn main_page_from_panel(panel: id) -> id {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return nil;
+        }
+
+        let controller = &*(controller as *const Object);
+        *controller.get_ivar("main_page")
+    }
+}
+
+fn settings_page_from_panel(panel: id) -> id {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return nil;
+        }
+
+        let controller = &*(controller as *const Object);
+        *controller.get_ivar("settings_page")
+    }
+}
+
+fn set_label_text(label: id, text: &str) {
+    unsafe {
+        if label == nil {
+            return;
+        }
+
+        let value = NSString::alloc(nil).init_str(text);
+        let _: () = msg_send![label, setStringValue: value];
+    }
+}
+
+fn set_view_hidden(view: id, hidden: bool) {
+    unsafe {
+        if view == nil {
+            return;
+        }
+
+        let _: () = msg_send![view, setHidden: if hidden { YES } else { NO }];
+    }
+}
+
+fn set_button_enabled(button: id, enabled: bool) {
+    unsafe {
+        if button == nil {
+            return;
+        }
+
+        let _: () = msg_send![button, setEnabled: if enabled { YES } else { NO }];
+        let _: () = msg_send![button, setAlphaValue: if enabled { 1.0f64 } else { 0.56f64 }];
+    }
+}
+
+fn hotkey_draft_binding() -> Option<hotkey::HotKeyBinding> {
+    HOTKEY_DRAFT_BINDING.with(|draft| *draft.borrow())
+}
+
+fn set_hotkey_draft_binding(binding: Option<hotkey::HotKeyBinding>) {
+    HOTKEY_DRAFT_BINDING.with(|draft| {
+        *draft.borrow_mut() = binding;
+    });
+}
+
+fn reset_hotkey_editor(panel: id) {
+    set_hotkey_draft_binding(None);
+    set_hotkey_recording(panel, false, None);
+    refresh_hotkey_views(panel);
+}
+
+fn is_hotkey_recording(panel: id) -> bool {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return false;
+        }
+
+        let controller = &*(controller as *const Object);
+        let recording: BOOL = *controller.get_ivar("hotkey_recording");
+        recording == YES
+    }
+}
+
+fn set_hotkey_recording(panel: id, recording: bool, message: Option<&str>) {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return;
+        }
+
+        let controller = &mut *(controller as *mut Object);
+        let subtitle_label: id = *controller.get_ivar("settings_subtitle_label");
+        let record_button: id = *controller.get_ivar("settings_record_button");
+        let save_button: id = *controller.get_ivar("settings_save_button");
+        let cancel_button: id = *controller.get_ivar("settings_cancel_button");
+        let has_draft = hotkey_draft_binding().is_some();
+
+        controller.set_ivar("hotkey_recording", if recording { YES } else { NO });
+        set_label_text(
+            subtitle_label,
+            message.unwrap_or(if recording {
+                HOTKEY_SETTINGS_RECORDING_HINT
+            } else if has_draft {
+                HOTKEY_SETTINGS_PENDING_HINT
+            } else {
+                HOTKEY_SETTINGS_IDLE_HINT
+            }),
+        );
+        set_view_hidden(record_button, recording || has_draft);
+        set_view_hidden(save_button, !recording && !has_draft);
+        set_button_enabled(save_button, has_draft);
+        set_view_hidden(cancel_button, !recording && !has_draft);
+    }
+}
+
+fn cancel_hotkey_recording_if_needed(panel: id) {
+    if is_hotkey_recording(panel) || hotkey_draft_binding().is_some() {
+        reset_hotkey_editor(panel);
+    }
+}
+
+fn handle_hotkey_recording_key_event(panel: id, event: id) -> bool {
+    unsafe {
+        if panel == nil || event == nil || !is_hotkey_recording(panel) {
+            return false;
+        }
+
+        let is_repeat: BOOL = msg_send![event, isARepeat];
+        if is_repeat == YES {
+            return true;
+        }
+
+        let key_code: u16 = msg_send![event, keyCode];
+        if key_code == HOTKEY_CAPTURE_CANCEL_KEYCODE {
+            cancel_hotkey_recording_if_needed(panel);
+            return true;
+        }
+
+        let modifier_flags: usize = msg_send![event, modifierFlags];
+        let binding = match hotkey::binding_from_key_event(key_code, modifier_flags as u64) {
+            Ok(binding) => binding,
+            Err(message) => {
+                set_hotkey_recording(panel, true, Some(&message));
+                return true;
+            }
+        };
+
+        if binding == hotkey::current_binding() {
+            set_hotkey_draft_binding(None);
+            refresh_hotkey_views(panel);
+            set_hotkey_recording(panel, false, Some("该组合已是当前绑定，无需重复保存"));
+            return true;
+        }
+
+        set_hotkey_draft_binding(Some(binding));
+        refresh_hotkey_views(panel);
+        set_hotkey_recording(panel, false, None);
+
+        true
+    }
+}
+
+fn refresh_hotkey_views(panel: id) {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return;
+        }
+
+        let controller = &*(controller as *const Object);
+        let footer_modifier_label: id = *controller.get_ivar("footer_modifier_label");
+        let footer_key_label: id = *controller.get_ivar("footer_key_label");
+        let settings_preview_label: id = *controller.get_ivar("settings_preview_label");
+
+        let binding = hotkey::current_binding();
+        let preview_binding = hotkey_draft_binding().unwrap_or(binding);
+        let preview_text = preview_binding.preview_text();
+
+        set_label_text(footer_modifier_label, binding.modifier_symbol());
+        set_label_text(footer_key_label, binding.key_label());
+        set_label_text(settings_preview_label, &preview_text);
+    }
+}
+
+fn pulse_hotkey_labels(panel: id) {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return;
+        }
+
+        let controller = &*(controller as *const Object);
+        let footer_modifier_label: id = *controller.get_ivar("footer_modifier_label");
+        let footer_key_label: id = *controller.get_ivar("footer_key_label");
+        let settings_preview_label: id = *controller.get_ivar("settings_preview_label");
+
+        for view in [
+            footer_modifier_label,
+            footer_key_label,
+            settings_preview_label,
+        ] {
+            if view == nil {
+                continue;
+            }
+
+            let _: () = msg_send![view, setAlphaValue: 0.66f64];
+            animate_view_alpha(view, 1.0);
+        }
+    }
+}
+
+fn transition_settings_page(panel: id, show_settings: bool) {
+    unsafe {
+        let controller = controller_from_panel(panel);
+        if controller == nil {
+            return;
+        }
+
+        let main_page = main_page_from_panel(panel);
+        let settings_page = settings_page_from_panel(panel);
+        if main_page == nil || settings_page == nil {
+            return;
+        }
+
+        let controller = &mut *(controller as *mut Object);
+        if !show_settings {
+            reset_hotkey_editor(panel);
+        }
+        controller.set_ivar("settings_visible", if show_settings { YES } else { NO });
+
+        let main_page_origin = if show_settings {
+            NSPoint::new(-22.0, 0.0)
+        } else {
+            NSPoint::new(0.0, 0.0)
+        };
+        let settings_page_origin = if show_settings {
+            NSPoint::new(0.0, 0.0)
+        } else {
+            NSPoint::new(SETTINGS_PAGE_OFFSET_X, 0.0)
+        };
+
+        if show_settings {
+            let _: BOOL = msg_send![panel, makeFirstResponder: nil];
+            reset_hotkey_editor(panel);
+        }
+
+        animate_view_origin(main_page, main_page_origin, 0.18);
+        animate_view_alpha(main_page, if show_settings { 0.18 } else { 1.0 });
+
+        animate_view_origin(settings_page, settings_page_origin, 0.22);
+        animate_view_alpha(settings_page, if show_settings { 1.0 } else { 0.0 });
+
+        if show_settings {
+            pulse_hotkey_labels(panel);
+        } else {
+            let input_field = input_field_from_panel(panel);
+            if input_field != nil {
+                let _: BOOL = msg_send![panel, makeFirstResponder: input_field];
+                let _: () = msg_send![input_field, selectText: nil];
+            }
+        }
     }
 }
 
@@ -474,27 +929,68 @@ fn build_panel(controller: id) -> id {
             PANEL_RADIUS,
         );
 
-        add_brand_header(content_view);
-        add_header_actions(content_view, controller);
-        add_search_bar(content_view, controller);
+        let main_page = build_page_container(NSPoint::new(0.0, 0.0));
+        add_brand_header(main_page);
+        add_search_bar(main_page, controller);
         add_divider(
-            content_view,
+            main_page,
             NSRect::new(NSPoint::new(0.0, DIVIDER_Y), NSSize::new(PANEL_WIDTH, 1.0)),
             (25, 25, 29, 1.0),
         );
+        let history_document_view = add_history_list(main_page);
+        let (footer_modifier_label, footer_key_label) = add_footer(main_page);
 
-        let history_document_view = add_history_list(content_view);
+        let settings_views = add_settings_page(controller);
+        let _: () = msg_send![content_view, addSubview: main_page];
+        let _: () = msg_send![content_view, addSubview: settings_views.page];
+        add_header_actions(content_view, controller);
+
         let controller = &mut *(controller as *mut Object);
         controller.set_ivar("history_document_view", history_document_view);
-
-        add_footer(content_view);
+        controller.set_ivar("main_page", main_page);
+        controller.set_ivar("settings_page", settings_views.page);
+        controller.set_ivar("settings_subtitle_label", settings_views.subtitle_label);
+        controller.set_ivar("footer_modifier_label", footer_modifier_label);
+        controller.set_ivar("footer_key_label", footer_key_label);
+        controller.set_ivar("settings_preview_label", settings_views.preview_label);
+        controller.set_ivar("settings_record_button", settings_views.record_button);
+        controller.set_ivar("settings_save_button", settings_views.save_button);
+        controller.set_ivar("settings_cancel_button", settings_views.cancel_button);
+        controller.set_ivar("hotkey_recording", NO);
+        controller.set_ivar("settings_visible", NO);
 
         panel
     }
 }
 
 fn add_brand_header(content_view: id) {
-    let _ = content_view;
+    unsafe {
+        let title_label = build_text_label(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, PANEL_HEIGHT - 50.0),
+                NSSize::new(120.0, 20.0),
+            ),
+            "最近复制",
+            13.0,
+            false,
+            (161, 161, 170, 0.94),
+            0,
+        );
+        let subtitle_label = build_text_label(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, PANEL_HEIGHT - 72.0),
+                NSSize::new(180.0, 16.0),
+            ),
+            "点击条目即可粘贴",
+            11.0,
+            false,
+            (82, 82, 91, 1.0),
+            0,
+        );
+
+        let _: () = msg_send![content_view, addSubview: title_label];
+        let _: () = msg_send![content_view, addSubview: subtitle_label];
+    }
 }
 
 fn add_header_actions(content_view: id, controller: id) {
@@ -506,7 +1002,7 @@ fn add_header_actions(content_view: id, controller: id) {
             let settings_button = build_icon_button(
                 NSRect::new(
                     NSPoint::new(
-                        right_edge - (HEADER_BUTTON_SIZE + HEADER_BUTTON_SPACING) * 2.0,
+                        right_edge - (HEADER_BUTTON_SIZE + HEADER_BUTTON_SPACING),
                         top_y,
                     ),
                     NSSize::new(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE),
@@ -517,25 +1013,6 @@ fn add_header_actions(content_view: id, controller: id) {
                 settings_image,
             );
             let _: () = msg_send![content_view, addSubview: settings_button];
-        }
-
-        if let Some(check_image) =
-            build_colored_svg_image(CHECK_ICON_SVG, "#A1A1AA", HEADER_ICON_SIZE)
-        {
-            let check_button = build_icon_button(
-                NSRect::new(
-                    NSPoint::new(
-                        right_edge - (HEADER_BUTTON_SIZE + HEADER_BUTTON_SPACING),
-                        top_y,
-                    ),
-                    NSSize::new(HEADER_BUTTON_SIZE, HEADER_BUTTON_SIZE),
-                ),
-                controller,
-                sel!(submitText:),
-                "执行粘贴",
-                check_image,
-            );
-            let _: () = msg_send![content_view, addSubview: check_button];
         }
 
         if let Some(delete_image) = build_svg_image(DELETE_ICON_SVG, HEADER_ICON_SIZE) {
@@ -638,8 +1115,9 @@ fn add_search_bar(content_view: id, controller: id) {
     }
 }
 
-fn add_footer(content_view: id) {
+fn add_footer(content_view: id) -> (id, id) {
     unsafe {
+        let binding = hotkey::current_binding();
         let footer_frame = NSRect::new(
             NSPoint::new(0.0, 0.0),
             NSSize::new(PANEL_WIDTH, FOOTER_HEIGHT),
@@ -665,9 +1143,9 @@ fn add_footer(content_view: id) {
             (229, 231, 235, 1.0),
             0,
         );
-        let option_key = build_keycap(
+        let (option_key, modifier_label) = build_keycap(
             NSRect::new(NSPoint::new(126.0, 10.0), NSSize::new(46.0, 36.0)),
-            "⌥",
+            binding.modifier_symbol(),
         );
         let plus = build_text_label(
             NSRect::new(NSPoint::new(178.0, 16.0), NSSize::new(20.0, 20.0)),
@@ -677,9 +1155,9 @@ fn add_footer(content_view: id) {
             (229, 231, 235, 1.0),
             1,
         );
-        let letter_key = build_keycap(
+        let (letter_key, key_label) = build_keycap(
             NSRect::new(NSPoint::new(206.0, 10.0), NSSize::new(42.0, 36.0)),
-            "C",
+            binding.key_label(),
         );
 
         let _: () = msg_send![footer, addSubview: label];
@@ -687,10 +1165,12 @@ fn add_footer(content_view: id) {
         let _: () = msg_send![footer, addSubview: plus];
         let _: () = msg_send![footer, addSubview: letter_key];
         let _: () = msg_send![content_view, addSubview: footer];
+
+        (modifier_label, key_label)
     }
 }
 
-fn build_keycap(frame: NSRect, text: &str) -> id {
+fn build_keycap(frame: NSRect, text: &str) -> (id, id) {
     unsafe {
         let keycap: id = msg_send![class!(NSView), alloc];
         let keycap: id = msg_send![keycap, initWithFrame: frame];
@@ -713,7 +1193,219 @@ fn build_keycap(frame: NSRect, text: &str) -> id {
             1,
         );
         let _: () = msg_send![keycap, addSubview: label];
-        keycap
+        (keycap, label)
+    }
+}
+
+fn build_page_container(origin: NSPoint) -> id {
+    unsafe {
+        let page: id = msg_send![class!(NSView), alloc];
+        let page: id = msg_send![
+            page,
+            initWithFrame: NSRect::new(origin, NSSize::new(PANEL_WIDTH, PANEL_HEIGHT))
+        ];
+        style_view(page, Some((4, 4, 6, 0.0)), None, 0.0);
+        page
+    }
+}
+
+struct SettingsPageViews {
+    page: id,
+    subtitle_label: id,
+    preview_label: id,
+    record_button: id,
+    save_button: id,
+    cancel_button: id,
+}
+
+fn add_settings_page(controller: id) -> SettingsPageViews {
+    unsafe {
+        let binding = hotkey::current_binding();
+        let settings_page = build_page_container(NSPoint::new(SETTINGS_PAGE_OFFSET_X, 0.0));
+        let _: () = msg_send![settings_page, setAlphaValue: 0.0f64];
+
+        let title = build_text_label(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, SETTINGS_TITLE_Y),
+                NSSize::new(220.0, 28.0),
+            ),
+            "快捷键设置",
+            24.0,
+            true,
+            (244, 244, 245, 0.97),
+            0,
+        );
+        let subtitle = build_text_label(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, SETTINGS_SUBTITLE_Y),
+                NSSize::new(PANEL_WIDTH - PANEL_SIDE_MARGIN * 2.0, 18.0),
+            ),
+            HOTKEY_SETTINGS_IDLE_HINT,
+            13.0,
+            false,
+            (113, 113, 122, 1.0),
+            0,
+        );
+
+        let preview_shell: id = msg_send![class!(NSView), alloc];
+        let preview_shell: id = msg_send![
+            preview_shell,
+            initWithFrame: NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, SETTINGS_PREVIEW_Y),
+                NSSize::new(SETTINGS_CARD_WIDTH, SETTINGS_PREVIEW_HEIGHT),
+            )
+        ];
+        style_view(
+            preview_shell,
+            Some((8, 10, 14, 1.0)),
+            Some((34, 50, 78, 1.0, 1.0)),
+            20.0,
+        );
+
+        let preview_caption = build_text_label(
+            NSRect::new(NSPoint::new(20.0, 114.0), NSSize::new(120.0, 18.0)),
+            "绑定预览",
+            12.0,
+            false,
+            (113, 113, 122, 1.0),
+            0,
+        );
+        let preview_label = build_text_label(
+            NSRect::new(NSPoint::new(20.0, 58.0), NSSize::new(320.0, 36.0)),
+            &binding.preview_text(),
+            26.0,
+            true,
+            (248, 250, 252, 1.0),
+            0,
+        );
+        let preview_hint = build_text_label(
+            NSRect::new(NSPoint::new(20.0, 24.0), NSSize::new(320.0, 16.0)),
+            "仅支持一个修饰键 + 字母 / 数字",
+            11.0,
+            false,
+            (82, 82, 91, 1.0),
+            0,
+        );
+
+        let record_button = build_action_button(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, SETTINGS_ACTION_BUTTON_Y),
+                NSSize::new(SETTINGS_CARD_WIDTH, SETTINGS_ACTION_BUTTON_HEIGHT),
+            ),
+            controller,
+            sel!(beginHotkeyRecording:),
+            "录制新快捷键",
+            (12, 70, 173, 1.0),
+            (34, 111, 244, 1.0, 1.0),
+            (248, 250, 252, 1.0),
+        );
+        let save_button = build_action_button(
+            NSRect::new(
+                NSPoint::new(
+                    PANEL_SIDE_MARGIN + SETTINGS_ACTION_BUTTON_WIDTH + SETTINGS_ACTION_BUTTON_GAP,
+                    SETTINGS_ACTION_BUTTON_Y,
+                ),
+                NSSize::new(SETTINGS_ACTION_BUTTON_WIDTH, SETTINGS_ACTION_BUTTON_HEIGHT),
+            ),
+            controller,
+            sel!(saveHotkeyBinding:),
+            "保存",
+            (12, 70, 173, 1.0),
+            (34, 111, 244, 1.0, 1.0),
+            (248, 250, 252, 1.0),
+        );
+        let cancel_button = build_action_button(
+            NSRect::new(
+                NSPoint::new(PANEL_SIDE_MARGIN, SETTINGS_ACTION_BUTTON_Y),
+                NSSize::new(SETTINGS_ACTION_BUTTON_WIDTH, SETTINGS_ACTION_BUTTON_HEIGHT),
+            ),
+            controller,
+            sel!(cancelHotkeyRecording:),
+            "取消",
+            (25, 25, 30, 1.0),
+            (63, 63, 70, 1.0, 1.0),
+            (244, 244, 245, 1.0),
+        );
+        let _: () = msg_send![save_button, setHidden: YES];
+        let _: () = msg_send![cancel_button, setHidden: YES];
+
+        let _: () = msg_send![preview_shell, addSubview: preview_caption];
+        let _: () = msg_send![preview_shell, addSubview: preview_label];
+        let _: () = msg_send![preview_shell, addSubview: preview_hint];
+
+        let _: () = msg_send![settings_page, addSubview: title];
+        let _: () = msg_send![settings_page, addSubview: subtitle];
+        let _: () = msg_send![settings_page, addSubview: preview_shell];
+        let _: () = msg_send![settings_page, addSubview: record_button];
+        let _: () = msg_send![settings_page, addSubview: save_button];
+        let _: () = msg_send![settings_page, addSubview: cancel_button];
+
+        SettingsPageViews {
+            page: settings_page,
+            subtitle_label: subtitle,
+            preview_label,
+            record_button,
+            save_button,
+            cancel_button,
+        }
+    }
+}
+
+fn build_action_button(
+    frame: NSRect,
+    controller: id,
+    action: Sel,
+    title: &str,
+    background: (u8, u8, u8, f64),
+    border: (u8, u8, u8, f64, f64),
+    text_color: (u8, u8, u8, f64),
+) -> id {
+    unsafe {
+        let button_class = register_history_row_button_class();
+        let button: id = msg_send![button_class, alloc];
+        let button: id = msg_send![button, initWithFrame: frame];
+        let empty_title = NSString::alloc(nil).init_str("");
+        let _: () = msg_send![button, setTitle: empty_title];
+        let _: () = msg_send![button, setBordered: NO];
+        let _: () = msg_send![button, setTarget: controller];
+        let _: () = msg_send![button, setAction: action];
+        let _: () = msg_send![button, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
+        style_view(button, Some(background), Some(border), 16.0);
+
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), frame.size);
+        let hover_overlay: id = msg_send![class!(NSView), alloc];
+        let hover_overlay: id = msg_send![hover_overlay, initWithFrame: bounds];
+        style_view(hover_overlay, Some((255, 255, 255, 0.08)), None, 16.0);
+        let _: () = msg_send![hover_overlay, setAlphaValue: 0.0f64];
+
+        let tracking_area: id = msg_send![class!(NSTrackingArea), alloc];
+        let tracking_area: id = msg_send![
+            tracking_area,
+            initWithRect: bounds
+            options: NS_TRACKING_MOUSE_ENTERED_AND_EXITED | NS_TRACKING_ACTIVE_ALWAYS | NS_TRACKING_IN_VISIBLE_RECT
+            owner: button
+            userInfo: nil
+        ];
+        let _: () = msg_send![button, addTrackingArea: tracking_area];
+        let button_mut = &mut *(button as *mut Object);
+        button_mut.set_ivar("hover_overlay", hover_overlay);
+
+        let title_label = build_text_label(
+            NSRect::new(
+                NSPoint::new(0.0, 11.0),
+                NSSize::new(frame.size.width, frame.size.height - 22.0),
+            ),
+            title,
+            14.0,
+            true,
+            text_color,
+            1,
+        );
+
+        let _: () = msg_send![button, addSubview: hover_overlay];
+        let _: () = msg_send![button, addSubview: title_label];
+
+        button
     }
 }
 
@@ -1109,6 +1801,21 @@ fn animate_view_alpha(view: id, alpha: f64) {
         let _: () = msg_send![context, setDuration: 0.16f64];
         let animator: id = msg_send![view, animator];
         let _: () = msg_send![animator, setAlphaValue: alpha];
+        let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+    }
+}
+
+fn animate_view_origin(view: id, origin: NSPoint, duration: f64) {
+    unsafe {
+        if view == nil {
+            return;
+        }
+
+        let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
+        let context: id = msg_send![class!(NSAnimationContext), currentContext];
+        let _: () = msg_send![context, setDuration: duration];
+        let animator: id = msg_send![view, animator];
+        let _: () = msg_send![animator, setFrameOrigin: origin];
         let _: () = msg_send![class!(NSAnimationContext), endGrouping];
     }
 }
