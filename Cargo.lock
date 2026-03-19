@@ -276,6 +276,7 @@ name = "cococa-clip"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "block",
  "cocoa",
  "core-graphics",
  "env_logger",

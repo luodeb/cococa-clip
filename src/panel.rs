@@ -1,4 +1,6 @@
+use block::ConcreteBlock;
 use cocoa::appkit::NSBackingStoreType;
+use cocoa::appkit::NSEventMask;
 use cocoa::base::{BOOL, NO, YES, id, nil};
 use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
 use log::{debug, error};
@@ -82,6 +84,8 @@ pub fn register_controller_class() -> *const Class {
             .expect("ClipPanelController class declaration failed");
         decl.add_ivar::<id>("panel");
         decl.add_ivar::<id>("history_document_view");
+        decl.add_ivar::<id>("global_click_monitor");
+        decl.add_ivar::<id>("local_click_monitor");
 
         decl.add_method(
             sel!(applicationDidFinishLaunching:),
@@ -161,6 +165,7 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
 
         let this_mut = this as *const Object as *mut Object;
         (*this_mut).set_ivar("panel", panel);
+        install_outside_click_monitors(this_mut, panel);
 
         if let Err(err) = tray::init_tray() {
             error!("初始化托盘失败: {err}");
@@ -328,6 +333,74 @@ fn show_panel(panel: id) {
             let _: BOOL = msg_send![panel, makeFirstResponder: input_field];
             let _: () = msg_send![input_field, selectText: nil];
         }
+    }
+}
+
+fn install_outside_click_monitors(controller: *mut Object, panel: id) {
+    unsafe {
+        if controller.is_null() || panel == nil {
+            return;
+        }
+
+        let left_mouse_down_mask = NSEventMask::NSLeftMouseDownMask.bits();
+
+        let global_handler = ConcreteBlock::new(move |_event: id| {
+            hide_panel_if_outside_click(panel);
+        })
+        .copy();
+        let global_monitor: id = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: left_mouse_down_mask
+            handler: &*global_handler
+        ];
+
+        let local_handler = ConcreteBlock::new(move |event: id| -> id {
+            hide_panel_if_outside_click(panel);
+            event
+        })
+        .copy();
+        let local_monitor: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: left_mouse_down_mask
+            handler: &*local_handler
+        ];
+
+        (*controller).set_ivar("global_click_monitor", global_monitor);
+        (*controller).set_ivar("local_click_monitor", local_monitor);
+    }
+}
+
+fn current_mouse_location() -> NSPoint {
+    unsafe { msg_send![class!(NSEvent), mouseLocation] }
+}
+
+fn hide_panel_if_outside_click(panel: id) {
+    unsafe {
+        if panel == nil {
+            return;
+        }
+
+        let is_visible: bool = msg_send![panel, isVisible];
+        if !is_visible {
+            return;
+        }
+
+        let click_location = current_mouse_location();
+        if point_inside_panel_frame(panel, click_location) {
+            return;
+        }
+
+        let _: () = msg_send![panel, orderOut: nil];
+    }
+}
+
+fn point_inside_panel_frame(panel: id, point: NSPoint) -> bool {
+    unsafe {
+        let frame: NSRect = msg_send![panel, frame];
+        point.x >= frame.origin.x
+            && point.x <= frame.origin.x + frame.size.width
+            && point.y >= frame.origin.y
+            && point.y <= frame.origin.y + frame.size.height
     }
 }
 

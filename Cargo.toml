@@ -17,3 +17,4 @@ global-hotkey = "0.7.0"
 resvg = { version = "0.45.1", default-features = false }
 png = "0.17"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
+block = "0.1.6"
