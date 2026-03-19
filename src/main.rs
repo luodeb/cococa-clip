@@ -5,8 +5,12 @@
 extern crate objc;
 
 mod app;
+mod history;
+mod hotkey;
+mod icons;
 mod panel;
 mod paste;
+mod tray;
 
 use env_logger::Env;
 use log::debug;

@@ -64,7 +64,11 @@ fn create_event_source() -> Result<CGEventSource, String> {
         .map_err(|_| "创建 CGEventSource 失败（通常是系统权限或会话状态问题）".to_owned())
 }
 
-fn build_key_event(source: &CGEventSource, key_code: CGKeyCode, is_key_down: bool) -> Result<CGEvent, String> {
+fn build_key_event(
+    source: &CGEventSource,
+    key_code: CGKeyCode,
+    is_key_down: bool,
+) -> Result<CGEvent, String> {
     CGEvent::new_keyboard_event(source.clone(), key_code, is_key_down)
         .map_err(|_| "创建键盘事件失败".to_owned())
 }
@@ -116,6 +120,12 @@ pub fn commit_text(content: &str) -> Result<(), String> {
 
     debug!("using Cmd+V paste flow (content={:?})", content);
     write_to_clipboard(content)?;
+
+    commit_current_clipboard()
+}
+
+pub fn commit_current_clipboard() -> Result<(), String> {
+    debug!("using Cmd+V paste flow with current clipboard contents");
 
     let target_pid = frontmost_application_pid()?;
     if let Err(err) = activate_application(target_pid) {
