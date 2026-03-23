@@ -163,6 +163,141 @@ pub fn paste_entry(entry_id: i64) -> Result<(), String> {
     })
 }
 
+pub fn preview_image_data(entry_id: i64) -> Result<Option<Vec<u8>>, String> {
+    HISTORY.with(|slot| {
+        let state = slot.borrow();
+        let history = state
+            .as_ref()
+            .ok_or_else(|| "剪切板历史尚未初始化".to_owned())?;
+
+        let mut statement = history
+            .connection
+            .prepare(
+                "SELECT r.type_identifier, r.representation_kind, r.payload
+                 FROM clipboard_items i
+                 JOIN clipboard_representations r ON r.item_id = i.id
+                 WHERE i.entry_id = ?1
+                 ORDER BY i.item_index ASC, r.id ASC",
+            )
+            .map_err(|error| format!("准备图片预览查询失败: {error}"))?;
+
+        let rows = statement
+            .query_map(params![entry_id], |row| {
+                let type_identifier: String = row.get(0)?;
+                let representation_kind: String = row.get(1)?;
+                let payload: Vec<u8> = row.get(2)?;
+                Ok((type_identifier, representation_kind, payload))
+            })
+            .map_err(|error| format!("查询图片预览数据失败: {error}"))?;
+
+        let mut best_payload: Option<Vec<u8>> = None;
+        let mut best_type_identifier: Option<String> = None;
+        let mut best_rank = i32::MIN;
+        let mut candidate_count = 0usize;
+
+        for row in rows {
+            let (type_identifier, representation_kind, payload) =
+                row.map_err(|error| format!("解析图片预览数据失败: {error}"))?;
+
+            if representation_kind != REPRESENTATION_KIND_DATA {
+                continue;
+            }
+
+            if payload.is_empty() || !is_previewable_image_type(&type_identifier) {
+                continue;
+            }
+
+            candidate_count += 1;
+            let rank = preview_image_rank(&type_identifier);
+            if rank > best_rank {
+                best_rank = rank;
+                best_payload = Some(payload);
+                best_type_identifier = Some(type_identifier);
+            }
+        }
+
+        if candidate_count > 0 {
+            if let Some(type_identifier) = &best_type_identifier {
+                debug!(
+                    "image preview selected: entry_id={entry_id}, type={type_identifier}, rank={best_rank}, candidates={candidate_count}"
+                );
+            } else {
+                debug!(
+                    "image preview candidates found but no payload selected: entry_id={entry_id}, candidates={candidate_count}"
+                );
+            }
+        }
+
+        Ok(best_payload)
+    })
+}
+
+pub fn display_text_for_entry(entry_id: i64) -> Result<Option<String>, String> {
+    HISTORY.with(|slot| {
+        let state = slot.borrow();
+        let history = state
+            .as_ref()
+            .ok_or_else(|| "剪切板历史尚未初始化".to_owned())?;
+
+        let mut statement = history
+            .connection
+            .prepare(
+                "SELECT r.type_identifier, r.representation_kind, r.payload
+                 FROM clipboard_items i
+                 JOIN clipboard_representations r ON r.item_id = i.id
+                 WHERE i.entry_id = ?1
+                 ORDER BY i.item_index ASC, r.id ASC",
+            )
+            .map_err(|error| format!("准备文本显示查询失败: {error}"))?;
+
+        let rows = statement
+            .query_map(params![entry_id], |row| {
+                let type_identifier: String = row.get(0)?;
+                let representation_kind: String = row.get(1)?;
+                let payload: Vec<u8> = row.get(2)?;
+                Ok((type_identifier, representation_kind, payload))
+            })
+            .map_err(|error| format!("查询文本显示数据失败: {error}"))?;
+
+        for row in rows {
+            let (type_identifier, representation_kind, payload) =
+                row.map_err(|error| format!("解析文本显示数据失败: {error}"))?;
+
+            if representation_kind != REPRESENTATION_KIND_STRING {
+                continue;
+            }
+
+            if !is_text_type(&type_identifier) || payload.is_empty() {
+                continue;
+            }
+
+            let text = String::from_utf8_lossy(&payload).trim().to_owned();
+            if !text.is_empty() {
+                return Ok(Some(text));
+            }
+        }
+
+        Ok(None)
+    })
+}
+
+pub fn clear_history() -> Result<(), String> {
+    HISTORY.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let history = state
+            .as_mut()
+            .ok_or_else(|| "剪切板历史尚未初始化".to_owned())?;
+
+        history
+            .connection
+            .execute("DELETE FROM clipboard_entries", [])
+            .map_err(|error| format!("清空历史失败: {error}"))?;
+
+        history.last_change_count = current_change_count()?;
+        Ok(())
+    })
+}
+
 fn history_database_path() -> Result<PathBuf, String> {
     let home = std::env::var("HOME").map_err(|error| format!("读取 HOME 失败: {error}"))?;
     let directory = Path::new(&home)
@@ -349,7 +484,6 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
     let mut file_names = Vec::new();
     let mut has_image = false;
     let mut first_types = Vec::new();
-    let mut total_representations = 0_usize;
 
     for item_index in 0..count {
         let item = nsarray_object(items, item_index);
@@ -389,7 +523,6 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
             }
 
             if let Some(data_representation) = data_for_type(item, type_identifier_ns) {
-                total_representations += 1;
                 representations.push(ClipboardRepresentation {
                     type_identifier,
                     kind: REPRESENTATION_KIND_DATA,
@@ -399,7 +532,6 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
             }
 
             if let Some(string_representation) = string_for_type(item, type_identifier_ns) {
-                total_representations += 1;
                 representations.push(ClipboardRepresentation {
                     type_identifier,
                     kind: REPRESENTATION_KIND_STRING,
@@ -411,7 +543,6 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
             if let Some(property_list_representation) =
                 property_list_data_for_type(item, type_identifier_ns)?
             {
-                total_representations += 1;
                 representations.push(ClipboardRepresentation {
                     type_identifier,
                     kind: REPRESENTATION_KIND_PROPERTY_LIST,
@@ -436,11 +567,7 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
     let subtitle;
     if let Some(text) = preview_text {
         title = truncate_preview(&normalize_preview(&text), 42);
-        subtitle = format!(
-            "文本 · {} 项 · {} 个原始表示",
-            capture_items.len(),
-            total_representations
-        );
+        subtitle = format!("文本 · {} 项", capture_items.len());
     } else if !file_names.is_empty() {
         title = if file_names.len() == 1 {
             file_names[0].clone()
@@ -454,7 +581,7 @@ fn read_current_pasteboard_capture() -> Result<Option<ClipboardCapture>, String>
         } else {
             format!("{} 个图片项目", capture_items.len())
         };
-        subtitle = format!("图片 · {} 个原始表示", total_representations);
+        subtitle = "图片".to_owned();
     } else {
         title = "其他剪切板内容".to_owned();
         subtitle = truncate_preview(&first_types.join(" · "), 54);
@@ -670,6 +797,35 @@ fn is_image_type(type_identifier: &str) -> bool {
         || type_identifier.contains("png")
         || type_identifier.contains("jpeg")
         || type_identifier.contains("tiff")
+}
+
+fn is_previewable_image_type(type_identifier: &str) -> bool {
+    is_image_type(type_identifier)
+}
+
+fn preview_image_rank(type_identifier: &str) -> i32 {
+    let value = type_identifier.to_lowercase();
+
+    if value.contains("png") {
+        return 100;
+    }
+    if value.contains("jpeg") || value.contains("jpg") {
+        return 90;
+    }
+    if value.contains("tiff") || value.contains("tif") {
+        return 80;
+    }
+    if value.contains("gif") {
+        return 70;
+    }
+    if value.contains("bmp") {
+        return 60;
+    }
+    if value.contains("image") {
+        return 20;
+    }
+
+    0
 }
 
 fn normalize_preview(text: &str) -> String {

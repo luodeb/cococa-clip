@@ -87,6 +87,18 @@ fn register_controller_class() -> *const Class {
             sel!(historyRowPressed:),
             history_row_pressed as extern "C" fn(&Object, Sel, id),
         );
+        decl.add_method(
+            sel!(clearHistory:),
+            clear_history as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(searchChanged:),
+            search_changed as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(controlTextDidChange:),
+            control_text_did_change as extern "C" fn(&Object, Sel, id),
+        );
         decl.add_method(sel!(pollTick:), poll_tick as extern "C" fn(&Object, Sel, id));
 
         CLASS = decl.register();
@@ -199,6 +211,7 @@ extern "C" fn open_settings(this: &Object, _: Sel, _: id) {
         layout::place_settings_window(main_window, settings_window);
         let _: () = msg_send![settings_window, orderFrontRegardless];
         let _: () = msg_send![settings_window, makeKeyWindow];
+        let _: BOOL = msg_send![settings_window, makeFirstResponder: nil];
 
         controller_state::set_settings_visible(this, true);
         controller_state::refresh_hotkey_views(this);
@@ -260,6 +273,35 @@ extern "C" fn history_row_pressed(this: &Object, _: Sel, sender: id) {
     }
 }
 
+extern "C" fn search_changed(this: &Object, _: Sel, _: id) {
+    render_history(this);
+}
+
+extern "C" fn clear_history(this: &Object, _: Sel, _: id) {
+    match history::clear_history() {
+        Ok(_) => {
+            render_history(this);
+        }
+        Err(err) => {
+            error!("清空历史失败: {err}");
+        }
+    }
+}
+
+extern "C" fn control_text_did_change(this: &Object, _: Sel, notification: id) {
+    unsafe {
+        if notification == nil {
+            return;
+        }
+
+        let object: id = msg_send![notification, object];
+        let input = controller_state::input_field(this);
+        if object == input {
+            render_history(this);
+        }
+    }
+}
+
 extern "C" fn poll_tick(this: &Object, _: Sel, _: id) {
     let main_window = controller_state::main_window(this);
 
@@ -309,6 +351,9 @@ fn show_main_window(this: &Object) {
         if main_window == nil {
             return;
         }
+
+        controller_state::refresh_hotkey_views(this);
+        render_history(this);
 
         let _: () = msg_send![main_window, orderFrontRegardless];
         let _: () = msg_send![main_window, makeKeyWindow];

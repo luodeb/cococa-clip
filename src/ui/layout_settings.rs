@@ -14,6 +14,7 @@ const NS_WINDOW_BUTTON_CLOSE: usize = 0;
 const NS_WINDOW_BUTTON_MINIMIZE: usize = 1;
 const NS_WINDOW_BUTTON_ZOOM: usize = 2;
 const NS_WINDOW_TITLE_HIDDEN: usize = 1;
+const NS_FOCUS_RING_TYPE_NONE: usize = 1;
 
 pub fn build_settings_window(
     controller: id,
@@ -53,24 +54,27 @@ pub fn build_settings_window(
         place_settings_window(main_window, panel, width, height);
 
         let content: id = msg_send![panel, contentView];
-        widgets::style_view(
+        widgets::style_view_with_shadow(
             content,
-            Some((12, 12, 16, 0.99)),
-            Some((40, 40, 48, 1.0, 1.0)),
-            16.0,
+            Some((8, 15, 30, 0.98)),
+            Some((41, 69, 110, 0.95, 1.0)),
+            20.0,
+            (0, 0, 0, 0.35, 18.0, 0.0, -3.0),
         );
 
-        let (title_bar, _, _) = widgets::build_window_title_bar("快捷键设置", "独立窗口，不干扰主窗口", width);
-        let _: () = msg_send![title_bar, setFrameOrigin: NSPoint::new(0.0, height - 64.0)];
+        let (title_bar, _, _) = widgets::build_window_title_bar("快捷键设置", "录制新组合后保存即可生效", width);
+        let _: () = msg_send![title_bar, setFrameOrigin: NSPoint::new(0.0, height - 82.0)];
         let close_button = widgets::build_button(
-            NSRect::new(NSPoint::new(width - 96.0, height - 48.0), NSSize::new(76.0, 30.0)),
+            NSRect::new(NSPoint::new(width - 114.0, height - 56.0), NSSize::new(92.0, 34.0)),
             "关闭",
             controller,
             sel!(closeSettings:),
-            (52, 17, 20, 1.0),
-            (127, 29, 29, 1.0, 1.0),
-            (254, 226, 226, 1.0),
+            (63, 24, 31, 1.0),
+            (146, 40, 52, 1.0, 1.0),
+            (255, 228, 232, 1.0),
         );
+        let _: () = msg_send![close_button, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
+        let _: () = msg_send![close_button, setRefusesFirstResponder: YES];
 
         let _: () = msg_send![content, addSubview: title_bar];
         let _: () = msg_send![content, addSubview: close_button];
@@ -88,13 +92,13 @@ pub fn build_settings_form(
     unsafe {
         let hint = widgets::build_text_label(
             NSRect::new(
-                NSPoint::new(20.0, height - 96.0),
-                NSSize::new(width - 40.0, 20.0),
+                NSPoint::new(24.0, height - 112.0),
+                NSSize::new(width - 48.0, 20.0),
             ),
-            "点击录制后按新的组合键",
-            13.0,
+            "点击“开始录制”后，按下一个修饰键 + 主键",
+            12.5,
             false,
-            (148, 163, 184, 1.0),
+            (125, 164, 210, 1.0),
             0,
         );
 
@@ -102,66 +106,73 @@ pub fn build_settings_form(
         let preview_box: id = msg_send![
             preview_box,
             initWithFrame: NSRect::new(
-                NSPoint::new(20.0, height - 178.0),
-                NSSize::new(width - 40.0, 68.0),
+                NSPoint::new(24.0, height - 206.0),
+                NSSize::new(width - 48.0, 88.0),
             )
         ];
         widgets::style_view(
             preview_box,
-            Some((20, 25, 35, 1.0)),
-            Some((45, 64, 98, 1.0, 1.0)),
-            12.0,
+            Some((15, 28, 48, 0.97)),
+            Some((55, 103, 169, 0.9, 1.0)),
+            14.0,
         );
 
         let preview_title = widgets::build_text_label(
-            NSRect::new(NSPoint::new(12.0, 40.0), NSSize::new(200.0, 16.0)),
-            "预览",
-            11.0,
+            NSRect::new(NSPoint::new(14.0, 58.0), NSSize::new(200.0, 16.0)),
+            "新的快捷键预览",
+            11.5,
             false,
-            (148, 163, 184, 1.0),
+            (129, 171, 220, 1.0),
             0,
         );
         let preview_value = widgets::build_text_label(
-            NSRect::new(NSPoint::new(12.0, 12.0), NSSize::new(260.0, 24.0)),
+            NSRect::new(NSPoint::new(14.0, 18.0), NSSize::new(280.0, 34.0)),
             "-",
-            19.0,
+            24.0,
             true,
-            (241, 245, 249, 1.0),
+            (230, 245, 255, 1.0),
             0,
         );
 
         let record_button = widgets::build_button(
-            NSRect::new(NSPoint::new(20.0, 34.0), NSSize::new(width - 40.0, 40.0)),
-            "录制新快捷键",
+            NSRect::new(NSPoint::new(24.0, 44.0), NSSize::new(width - 48.0, 42.0)),
+            "开始录制",
             controller,
             sel!(beginRecord:),
-            (24, 52, 91, 1.0),
-            (36, 88, 160, 1.0, 1.0),
-            (243, 244, 246, 1.0),
+            (26, 80, 132, 1.0),
+            (58, 146, 228, 1.0, 1.0),
+            (232, 245, 255, 1.0),
         );
 
         let save_button = widgets::build_button(
-            NSRect::new(NSPoint::new(20.0, 34.0), NSSize::new((width - 52.0) / 2.0, 40.0)),
+            NSRect::new(NSPoint::new(24.0, 44.0), NSSize::new((width - 60.0) / 2.0, 42.0)),
             "保存",
             controller,
             sel!(saveRecord:),
-            (16, 96, 58, 1.0),
-            (34, 197, 94, 1.0, 1.0),
-            (220, 252, 231, 1.0),
+            (16, 98, 65, 1.0),
+            (39, 196, 128, 1.0, 1.0),
+            (221, 255, 236, 1.0),
         );
 
         let cancel_button = widgets::build_button(
             NSRect::new(
-                NSPoint::new(32.0 + (width - 52.0) / 2.0, 34.0),
-                NSSize::new((width - 52.0) / 2.0, 40.0),
+                NSPoint::new(36.0 + (width - 60.0) / 2.0, 44.0),
+                NSSize::new((width - 60.0) / 2.0, 42.0),
             ),
             "取消",
             controller,
             sel!(cancelRecord:),
-            (52, 17, 20, 1.0),
-            (127, 29, 29, 1.0, 1.0),
-            (254, 226, 226, 1.0),
+            (65, 24, 28, 1.0),
+            (153, 44, 54, 1.0, 1.0),
+            (255, 225, 231, 1.0),
         );
+
+        let _: () = msg_send![record_button, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
+        let _: () = msg_send![save_button, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
+        let _: () = msg_send![cancel_button, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
+        let _: () = msg_send![record_button, setRefusesFirstResponder: YES];
+        let _: () = msg_send![save_button, setRefusesFirstResponder: YES];
+        let _: () = msg_send![cancel_button, setRefusesFirstResponder: YES];
 
         let _: () = msg_send![save_button, setHidden: YES];
         let _: () = msg_send![cancel_button, setHidden: YES];

@@ -7,9 +7,9 @@ use objc::runtime::Object;
 use objc::msg_send;
 use std::cell::RefCell;
 
-pub const HOTKEY_HINT_IDLE: &str = "点击录制后输入快捷键组合";
-pub const HOTKEY_HINT_RECORDING: &str = "正在录制，按 Esc 取消";
-pub const HOTKEY_HINT_PENDING: &str = "已录制新组合，点击保存应用";
+pub const HOTKEY_HINT_IDLE: &str = "准备好后点击“开始录制”";
+pub const HOTKEY_HINT_RECORDING: &str = "正在录制中，按下组合键（Esc 可取消）";
+pub const HOTKEY_HINT_PENDING: &str = "已捕获新组合，点击保存立即生效";
 
 thread_local! {
     static HOTKEY_DRAFT_BINDING: RefCell<Option<hotkey::HotKeyBinding>> = RefCell::new(None);

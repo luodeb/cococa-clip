@@ -3,8 +3,8 @@ use cocoa::base::id;
 use crate::ui::layout_main;
 use crate::ui::layout_settings;
 
-pub const MAIN_WIDTH: f64 = 460.0;
-pub const MAIN_HEIGHT: f64 = 560.0;
+pub const MAIN_WIDTH: f64 = 400.0;
+pub const MAIN_HEIGHT: f64 = 744.0;
 pub const SETTINGS_WIDTH: f64 = 420.0;
 pub const SETTINGS_HEIGHT: f64 = 320.0;
 

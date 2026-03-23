@@ -14,9 +14,12 @@ const NS_WINDOW_BUTTON_CLOSE: usize = 0;
 const NS_WINDOW_BUTTON_MINIMIZE: usize = 1;
 const NS_WINDOW_BUTTON_ZOOM: usize = 2;
 const NS_WINDOW_TITLE_HIDDEN: usize = 1;
+const NS_FOCUS_RING_TYPE_NONE: usize = 1;
 
-const HISTORY_SCROLL_TOP: f64 = 118.0;
-const HISTORY_SCROLL_BOTTOM: f64 = 54.0;
+const HEADER_HEIGHT: f64 = 34.0;
+const INPUT_AREA_HEIGHT: f64 = 52.0;
+const FOOTER_HEIGHT: f64 = 48.0;
+const CONTENT_SIDE_PADDING: f64 = 14.0;
 
 pub const INPUT_TAG: isize = 3001;
 
@@ -54,29 +57,32 @@ pub fn build_main_window(controller: id, width: f64, height: f64) -> id {
         let content: id = msg_send![panel, contentView];
         widgets::style_view(
             content,
-            Some((10, 10, 13, 0.98)),
-            Some((40, 40, 45, 1.0, 1.0)),
-            18.0,
+            Some((12, 14, 20, 0.98)),
+            Some((45, 50, 62, 0.95, 1.0)),
+            16.0,
         );
-
-        let (title_bar, _, _) = widgets::build_window_title_bar(
-            "剪贴板历史",
-            "回车粘贴输入内容，点击历史条目直接粘贴",
-            width,
-        );
-        let _: () = msg_send![title_bar, setFrameOrigin: NSPoint::new(0.0, height - 64.0)];
 
         let settings_button = widgets::build_button(
-            NSRect::new(NSPoint::new(width - 96.0, height - 48.0), NSSize::new(76.0, 30.0)),
+            NSRect::new(NSPoint::new(width - 88.0, height - 30.0), NSSize::new(70.0, 20.0)),
             "设置",
             controller,
             sel!(openSettings:),
-            (24, 52, 91, 1.0),
-            (36, 88, 160, 1.0, 1.0),
-            (243, 244, 246, 1.0),
+            (45, 50, 62, 1.0),
+            (72, 78, 95, 1.0, 1.0),
+            (214, 220, 233, 1.0),
         );
 
-        let _: () = msg_send![content, addSubview: title_bar];
+        let clear_button = widgets::build_button(
+            NSRect::new(NSPoint::new(width - 168.0, height - 30.0), NSSize::new(74.0, 20.0)),
+            "清空历史",
+            controller,
+            sel!(clearHistory:),
+            (60, 33, 36, 1.0),
+            (92, 51, 57, 1.0, 1.0),
+            (234, 213, 216, 1.0),
+        );
+
+        let _: () = msg_send![content, addSubview: clear_button];
         let _: () = msg_send![content, addSubview: settings_button];
 
         panel
@@ -89,32 +95,45 @@ pub fn build_input_section(content_view: id, controller: id, width: f64, height:
         let shell: id = msg_send![
             shell,
             initWithFrame: NSRect::new(
-                NSPoint::new(16.0, height - 112.0),
-                NSSize::new(width - 32.0, 46.0),
+                NSPoint::new(CONTENT_SIDE_PADDING, height - HEADER_HEIGHT - INPUT_AREA_HEIGHT - 10.0),
+                NSSize::new(width - CONTENT_SIDE_PADDING * 2.0, INPUT_AREA_HEIGHT),
             )
         ];
-        widgets::style_view(shell, Some((18, 18, 23, 1.0)), Some((52, 52, 62, 1.0, 1.0)), 12.0);
+        widgets::style_view(shell, Some((19, 22, 30, 1.0)), Some((56, 60, 74, 1.0, 1.0)), 10.0);
+
+        let search_icon = widgets::build_text_label(
+            NSRect::new(NSPoint::new(12.0, 14.0), NSSize::new(20.0, 20.0)),
+            "⌕",
+            16.0,
+            false,
+            (138, 146, 170, 1.0),
+            0,
+        );
 
         let input_field: id = msg_send![class!(NSTextField), alloc];
         let input_field: id = msg_send![
             input_field,
-            initWithFrame: NSRect::new(NSPoint::new(14.0, 8.0), NSSize::new(width - 60.0, 30.0))
+            initWithFrame: NSRect::new(
+                NSPoint::new(36.0, 10.0),
+                NSSize::new(width - CONTENT_SIDE_PADDING * 2.0 - 48.0, 32.0)
+            )
         ];
 
-        let placeholder = NSString::alloc(nil).init_str("输入后按回车直接粘贴");
-        let font: id = msg_send![class!(NSFont), systemFontOfSize: 15.0];
+        let placeholder = NSString::alloc(nil).init_str("搜索历史内容（文本、文件、图片）");
+        let font: id = msg_send![class!(NSFont), systemFontOfSize: 14.0];
         let _: () = msg_send![input_field, setTag: INPUT_TAG];
         let _: () = msg_send![input_field, setPlaceholderString: placeholder];
         let _: () = msg_send![input_field, setTarget: controller];
-        let _: () = msg_send![input_field, setAction: sel!(submitText:)];
+        let _: () = msg_send![input_field, setAction: sel!(searchChanged:)];
+        let _: () = msg_send![input_field, setDelegate: controller];
+        let _: () = msg_send![input_field, setFont: font];
+        let _: () = msg_send![input_field, setFocusRingType: NS_FOCUS_RING_TYPE_NONE];
         let _: () = msg_send![input_field, setBezeled: NO];
         let _: () = msg_send![input_field, setBordered: NO];
         let _: () = msg_send![input_field, setDrawsBackground: NO];
-        let _: () = msg_send![input_field, setEditable: YES];
-        let _: () = msg_send![input_field, setSelectable: YES];
-        let _: () = msg_send![input_field, setFont: font];
-        let _: () = msg_send![input_field, setTextColor: widgets::ns_color(230, 230, 235, 1.0)];
+        let _: () = msg_send![input_field, setTextColor: widgets::ns_color(218, 223, 236, 1.0)];
 
+        let _: () = msg_send![shell, addSubview: search_icon];
         let _: () = msg_send![shell, addSubview: input_field];
         let _: () = msg_send![content_view, addSubview: shell];
         input_field
@@ -123,13 +142,27 @@ pub fn build_input_section(content_view: id, controller: id, width: f64, height:
 
 pub fn build_history_section(content_view: id, width: f64, height: f64) -> id {
     unsafe {
-        let scroll_height = height - HISTORY_SCROLL_TOP - HISTORY_SCROLL_BOTTOM;
+        let history_top = height - HEADER_HEIGHT - INPUT_AREA_HEIGHT - 12.0;
+        let history_bottom = FOOTER_HEIGHT + 8.0;
+        let history_height = history_top - history_bottom;
+
+        let card: id = msg_send![class!(NSView), alloc];
+        let card: id = msg_send![
+            card,
+            initWithFrame: NSRect::new(
+                NSPoint::new(CONTENT_SIDE_PADDING, history_bottom),
+                NSSize::new(width - CONTENT_SIDE_PADDING * 2.0, history_height),
+            )
+        ];
+        widgets::style_view(card, Some((16, 18, 24, 1.0)), Some((56, 60, 74, 1.0, 1.0)), 12.0);
+
+        let scroll_height = history_height - 16.0;
         let scroll_view: id = msg_send![class!(NSScrollView), alloc];
         let scroll_view: id = msg_send![
             scroll_view,
             initWithFrame: NSRect::new(
-                NSPoint::new(0.0, HISTORY_SCROLL_BOTTOM),
-                NSSize::new(width, scroll_height),
+                NSPoint::new(8.0, 8.0),
+                NSSize::new(width - CONTENT_SIDE_PADDING * 2.0 - 16.0, scroll_height),
             )
         ];
 
@@ -140,12 +173,16 @@ pub fn build_history_section(content_view: id, width: f64, height: f64) -> id {
         let document_view: id = msg_send![class!(NSView), alloc];
         let document_view: id = msg_send![
             document_view,
-            initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, scroll_height))
+            initWithFrame: NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(width - CONTENT_SIDE_PADDING * 2.0 - 16.0, scroll_height),
+            )
         ];
-        widgets::style_view(document_view, Some((10, 10, 13, 0.0)), None, 0.0);
+        widgets::style_view(document_view, Some((16, 18, 24, 0.01)), None, 0.0);
 
         let _: () = msg_send![scroll_view, setDocumentView: document_view];
-        let _: () = msg_send![content_view, addSubview: scroll_view];
+        let _: () = msg_send![card, addSubview: scroll_view];
+        let _: () = msg_send![content_view, addSubview: card];
 
         document_view
     }
@@ -156,28 +193,28 @@ pub fn build_footer(content_view: id, width: f64) -> id {
         let footer: id = msg_send![class!(NSView), alloc];
         let footer: id = msg_send![
             footer,
-            initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, 54.0))
+            initWithFrame: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(width, FOOTER_HEIGHT))
         ];
-        widgets::style_view(footer, Some((16, 16, 20, 1.0)), None, 0.0);
+        widgets::style_view(footer, Some((12, 14, 20, 0.98)), Some((45, 50, 62, 1.0, 1.0)), 0.0);
 
         let divider = widgets::build_divider(
-            NSRect::new(NSPoint::new(0.0, 53.0), NSSize::new(width, 1.0)),
-            (34, 34, 39, 1.0),
+            NSRect::new(NSPoint::new(0.0, FOOTER_HEIGHT - 1.0), NSSize::new(width, 1.0)),
+            (52, 58, 74, 1.0),
         );
         let tip = widgets::build_text_label(
-            NSRect::new(NSPoint::new(16.0, 18.0), NSSize::new(120.0, 18.0)),
-            "当前快捷键",
-            13.0,
+            NSRect::new(NSPoint::new(14.0, 15.0), NSSize::new(100.0, 18.0)),
+            "快捷键",
+            11.0,
             false,
-            (148, 163, 184, 1.0),
+            (138, 146, 170, 1.0),
             0,
         );
         let value = widgets::build_text_label(
-            NSRect::new(NSPoint::new(128.0, 15.0), NSSize::new(200.0, 22.0)),
+            NSRect::new(NSPoint::new(72.0, 12.0), NSSize::new(160.0, 22.0)),
             "-",
-            15.0,
+            14.0,
             true,
-            (244, 244, 245, 1.0),
+            (210, 216, 231, 1.0),
             0,
         );
 
