@@ -1,8 +1,10 @@
 use cocoa::base::{BOOL, NO, YES, id, nil};
 use cocoa::foundation::NSString;
+use crate::autostart;
 use crate::hotkey;
 use crate::ui::layout;
 use crate::ui::widgets;
+use log::error;
 use objc::runtime::Object;
 use objc::msg_send;
 use std::cell::RefCell;
@@ -34,6 +36,27 @@ pub fn refresh_hotkey_views(this: &Object) {
 
     widgets::set_label_text(footer, &current.preview_text());
     widgets::set_label_text(preview, &next.preview_text());
+}
+
+pub fn refresh_autostart_toggle(this: &Object) {
+    unsafe {
+        let toggle = settings_autostart_toggle(this);
+        if toggle == nil {
+            return;
+        }
+
+        match autostart::is_enabled() {
+            Ok(enabled) => {
+                let _: () = msg_send![toggle, setEnabled: YES];
+                let _: () = msg_send![toggle, setState: if enabled { 1i64 } else { 0i64 }];
+            }
+            Err(err) => {
+                error!("读取开机自启状态失败: {err}");
+                let _: () = msg_send![toggle, setState: 0i64];
+                let _: () = msg_send![toggle, setEnabled: NO];
+            }
+        }
+    }
 }
 
 pub fn set_recording_state(this: &Object, recording: bool, hint: Option<&str>) {
@@ -159,4 +182,8 @@ pub fn settings_save_button(this: &Object) -> id {
 
 pub fn settings_cancel_button(this: &Object) -> id {
     unsafe { *this.get_ivar("settings_cancel_button") }
+}
+
+pub fn settings_autostart_toggle(this: &Object) -> id {
+    unsafe { *this.get_ivar("settings_autostart_toggle") }
 }

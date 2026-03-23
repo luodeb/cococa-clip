@@ -6,7 +6,7 @@ use crate::ui::layout_settings;
 pub const MAIN_WIDTH: f64 = 400.0;
 pub const MAIN_HEIGHT: f64 = 744.0;
 pub const SETTINGS_WIDTH: f64 = 420.0;
-pub const SETTINGS_HEIGHT: f64 = 320.0;
+pub const SETTINGS_HEIGHT: f64 = 420.0;
 
 pub struct UiHandles {
     pub main_window: id,
@@ -19,6 +19,7 @@ pub struct UiHandles {
     pub settings_record_button: id,
     pub settings_save_button: id,
     pub settings_cancel_button: id,
+    pub settings_autostart_toggle: id,
 }
 
 pub fn build_windows(controller: id) -> UiHandles {
@@ -34,7 +35,7 @@ pub fn build_windows(controller: id) -> UiHandles {
         let input_field = layout_main::build_input_section(main_content, controller, MAIN_WIDTH, MAIN_HEIGHT);
         let footer_hotkey_label = layout_main::build_footer(main_content, MAIN_WIDTH);
 
-        let (settings_hint_label, settings_preview_label, settings_record_button, settings_save_button, settings_cancel_button) =
+        let (settings_hint_label, settings_preview_label, settings_record_button, settings_save_button, settings_cancel_button, settings_autostart_toggle) =
             layout_settings::build_settings_form(settings_content, controller, SETTINGS_WIDTH, SETTINGS_HEIGHT);
 
         UiHandles {
@@ -48,6 +49,7 @@ pub fn build_windows(controller: id) -> UiHandles {
             settings_record_button,
             settings_save_button,
             settings_cancel_button,
+            settings_autostart_toggle,
         }
     }
 }

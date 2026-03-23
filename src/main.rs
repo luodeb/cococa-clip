@@ -5,6 +5,7 @@
 extern crate objc;
 
 mod app;
+mod autostart;
 mod history;
 mod hotkey;
 mod paste;

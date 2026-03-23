@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::app;
+use crate::autostart;
 use crate::history;
 use crate::hotkey;
 use crate::hotkey::HotKeyCommand;
@@ -51,6 +52,7 @@ fn register_controller_class() -> *const Class {
         decl.add_ivar::<id>("settings_record_button");
         decl.add_ivar::<id>("settings_save_button");
         decl.add_ivar::<id>("settings_cancel_button");
+        decl.add_ivar::<id>("settings_autostart_toggle");
         decl.add_ivar::<id>("global_click_monitor");
         decl.add_ivar::<id>("local_click_monitor");
         decl.add_ivar::<id>("local_key_monitor");
@@ -82,6 +84,10 @@ fn register_controller_class() -> *const Class {
         decl.add_method(
             sel!(cancelRecord:),
             cancel_record as extern "C" fn(&Object, Sel, id),
+        );
+        decl.add_method(
+            sel!(toggleLaunchAtLogin:),
+            toggle_launch_at_login as extern "C" fn(&Object, Sel, id),
         );
         decl.add_method(
             sel!(historyRowPressed:),
@@ -122,6 +128,7 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
         (*this_mut).set_ivar("settings_record_button", handles.settings_record_button);
         (*this_mut).set_ivar("settings_save_button", handles.settings_save_button);
         (*this_mut).set_ivar("settings_cancel_button", handles.settings_cancel_button);
+        (*this_mut).set_ivar("settings_autostart_toggle", handles.settings_autostart_toggle);
         (*this_mut).set_ivar("settings_visible", NO);
         (*this_mut).set_ivar("hotkey_recording", NO);
 
@@ -151,6 +158,7 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
         }
 
         controller_state::refresh_hotkey_views(this);
+        controller_state::refresh_autostart_toggle(this);
         render_history(this);
         show_main_window(this);
     });
@@ -215,6 +223,7 @@ extern "C" fn open_settings(this: &Object, _: Sel, _: id) {
 
         controller_state::set_settings_visible(this, true);
         controller_state::refresh_hotkey_views(this);
+        controller_state::refresh_autostart_toggle(this);
     }
 }
 
@@ -250,6 +259,29 @@ extern "C" fn cancel_record(this: &Object, _: Sel, _: id) {
     controller_state::set_hotkey_draft(None);
     controller_state::set_recording_state(this, false, None);
     controller_state::refresh_hotkey_views(this);
+}
+
+extern "C" fn toggle_launch_at_login(this: &Object, _: Sel, sender: id) {
+    let enabled = unsafe {
+        if sender != nil {
+            let state: i64 = msg_send![sender, state];
+            state == 1
+        } else {
+            match autostart::is_enabled() {
+                Ok(current) => !current,
+                Err(err) => {
+                    error!("读取开机自启状态失败: {err}");
+                    true
+                }
+            }
+        }
+    };
+
+    if let Err(err) = autostart::set_enabled(enabled) {
+        error!("更新开机自启失败: {err}");
+    }
+
+    controller_state::refresh_autostart_toggle(this);
 }
 
 extern "C" fn history_row_pressed(this: &Object, _: Sel, sender: id) {

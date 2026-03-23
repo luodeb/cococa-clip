@@ -16,3 +16,10 @@ tray-icon = { version = "0.21.3", default-features = false }
 global-hotkey = "0.7.0"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
 block = "0.1.6"
+
+[package.metadata.bundle]
+name = "Cococa Clip"
+identifier = "com.cococa.clip"
+short_description = "Clipboard history tool for macOS"
+category = "public.app-category.productivity"
+copyright = "Copyright (c) 2026 Cococa"

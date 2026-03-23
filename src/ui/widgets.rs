@@ -130,6 +130,17 @@ pub fn build_button(
     }
 }
 
+pub fn build_switch(frame: NSRect, target: id, action: objc::runtime::Sel) -> id {
+    unsafe {
+        let switch_button: id = msg_send![class!(NSSwitch), alloc];
+        let switch_button: id = msg_send![switch_button, initWithFrame: frame];
+        let _: () = msg_send![switch_button, setTarget: target];
+        let _: () = msg_send![switch_button, setAction: action];
+
+        switch_button
+    }
+}
+
 pub fn build_divider(frame: NSRect, color: (u8, u8, u8, f64)) -> id {
     unsafe {
         let divider: id = msg_send![class!(NSView), alloc];
