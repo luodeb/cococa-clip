@@ -7,15 +7,11 @@ pub enum TrayCommand {
 #[cfg(target_os = "macos")]
 use std::cell::RefCell;
 
-use crate::icons;
-
 #[cfg(target_os = "macos")]
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
 #[cfg(target_os = "macos")]
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-#[cfg(target_os = "macos")]
-const TRAY_ICON_SVG: &str = include_str!("../assets/icons/list.svg");
 #[cfg(target_os = "macos")]
 const TRAY_ICON_SIZE: u32 = 18;
 
@@ -103,7 +99,23 @@ impl MacTray {
 
 #[cfg(target_os = "macos")]
 fn build_tray_icon() -> Result<Icon, String> {
-    let rgba = icons::render_svg_rgba(TRAY_ICON_SVG, TRAY_ICON_SIZE)?;
+    let size = TRAY_ICON_SIZE as usize;
+    let mut rgba = vec![0u8; size * size * 4];
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f64 - (size as f64 * 0.5 - 0.5);
+            let dy = y as f64 - (size as f64 * 0.5 - 0.5);
+            let r = (dx * dx + dy * dy).sqrt();
+
+            let alpha = if r < 7.6 { 255u8 } else { 0u8 };
+            let index = (y * size + x) * 4;
+            rgba[index] = 255;
+            rgba[index + 1] = 255;
+            rgba[index + 2] = 255;
+            rgba[index + 3] = alpha;
+        }
+    }
 
     Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE)
         .map_err(|error| format!("Failed to build tray icon image: {error}"))

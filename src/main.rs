@@ -7,10 +7,9 @@ extern crate objc;
 mod app;
 mod history;
 mod hotkey;
-mod icons;
-mod panel;
 mod paste;
 mod tray;
+mod ui;
 
 use env_logger::Env;
 use log::debug;
@@ -22,7 +21,7 @@ fn main() {
 
     unsafe {
         let app = app::configure_app();
-        let controller = panel::new_controller_instance();
+        let controller = ui::new_controller_instance();
         let _: () = msg_send![app, setDelegate: controller];
         let _: () = msg_send![app, run];
     }
