@@ -1,5 +1,5 @@
 use cocoa::base::{BOOL, NO, YES, id, nil};
-use log::{debug, error};
+use log::error;
 use objc::declare::ClassDecl;
 use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel};
@@ -97,10 +97,8 @@ fn register_controller_class() -> *const Class {
 
 extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
     run_ffi_void("applicationDidFinishLaunching", || unsafe {
-        debug!("launch step: build windows");
         let handles = layout::build_windows(this as *const Object as id);
 
-        debug!("launch step: assign ivars");
         let this_mut = this as *const Object as *mut Object;
         (*this_mut).set_ivar("main_window", handles.main_window);
         (*this_mut).set_ivar("settings_window", handles.settings_window);
@@ -115,11 +113,9 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
         (*this_mut).set_ivar("settings_visible", NO);
         (*this_mut).set_ivar("hotkey_recording", NO);
 
-        debug!("launch step: keep panels above apps");
         app::keep_panel_above_apps(handles.main_window);
         app::keep_panel_above_apps(handles.settings_window);
 
-        debug!("launch step: center and install monitors");
         let _: () = msg_send![handles.main_window, center];
         layout::place_settings_window(handles.main_window, handles.settings_window);
         controller_events::install_event_monitors(
@@ -128,24 +124,20 @@ extern "C" fn did_finish_launching(this: &Object, _: Sel, _: id) {
             handles.settings_window,
         );
 
-        debug!("launch step: init tray");
         if let Err(err) = tray::init_tray() {
             error!("初始化托盘失败: {err}");
         } else {
             schedule_poll(this as *const Object as id);
         }
 
-        debug!("launch step: init hotkey");
         if let Err(err) = hotkey::init_hotkey() {
             error!("初始化全局快捷键失败: {err}");
         }
 
-        debug!("launch step: init history");
         if let Err(err) = history::init_history() {
             error!("初始化剪切板历史失败: {err}");
         }
 
-        debug!("launch step: refresh UI and show window");
         controller_state::refresh_hotkey_views(this);
         render_history(this);
         show_main_window(this);
